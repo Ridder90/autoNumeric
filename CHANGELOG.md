@@ -1,5 +1,10 @@
 ### Change log for autoNumeric:
 
+### "2.0.11"
++ Added Android Chrome mobile v57 support - further field testing needed
++ Please note that not all android browser are supported
++ fix paste issue on left and right parts - no issues published
+
 ### "2.0.10"
 + Fix issue #417 Error thrown in PhantomJS 2.1.1 on Linux under CI Environment
 + Fix the end-to-end tests for issue #403

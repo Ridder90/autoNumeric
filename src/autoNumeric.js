@@ -1,8 +1,8 @@
 /**
  *               autoNumeric.js
  *
- * @version      2.0.10
- * @date         2017-03-20 UTC 00:30
+ * @version      2.0.11
+ * @date         2017-04-06 UTC 00:30
  *
  * @author       Bob Knothe
  * @contributors Alexandre Bonneau, Sokolov Yura and other Github users,
@@ -2921,6 +2921,115 @@ if (typeof define === 'function' && define.amd) {
         }
 
         /**
+         * This function decides if the key pressed should be dropped or accepted, and modify the value 'on-the-fly' accordingly.
+         * Returns TRUE if the keycode is allowed.
+         * This functions also modify the value on-the-fly. //FIXME This should use another function in order to separate the test and the modification
+         *
+         * @param {Event} e
+         * @param character entered from android device
+         * @returns {boolean}
+         */
+        _processCharacterInsertionAndroid(e, charEntered) {
+            const settingsClone = this.settingsClone;
+            let [left, right] = this._getUnformattedLeftAndRightPartAroundTheSelection();
+
+            const eventCharacter = charEntered;
+
+            // Start rules when the decimal character key is pressed always use numeric pad dot to insert decimal separator
+            // Do not allow decimal character if no decimal part allowed
+            if (eventCharacter === settingsClone.decimalCharacter ||
+                (settingsClone.decimalCharacterAlternative && eventCharacter === settingsClone.decimalCharacterAlternative) ||
+                ((eventCharacter === '.' || eventCharacter === ',') && this.eventKeyCode === keyCode.DotNumpad)) {
+                if (!settingsClone.decimalPlacesOverride || !settingsClone.decimalCharacter) {
+                    return true;
+                }
+
+                // Do not allow decimal character before negativeSignCharacter character
+                if (settingsClone.negativeSignCharacter && contains(right, settingsClone.negativeSignCharacter)) {
+                    return true;
+                }
+
+                // Do not allow decimal character if other decimal character present
+                if (contains(left, settingsClone.decimalCharacter)) {
+                    return true;
+                }
+
+                if (right.indexOf(settingsClone.decimalCharacter) > 0) {
+                    return true;
+                }
+
+                if (right.indexOf(settingsClone.decimalCharacter) === 0) {
+                    right = right.substr(1);
+                }
+
+                this._setValueParts(left + settingsClone.decimalCharacter, right);
+
+                return true;
+            }
+
+            // Prevent minus if not allowed
+            if ((eventCharacter === '-' || eventCharacter === '+') && settingsClone.negativeSignCharacter === '-') {
+                if (!settingsClone) {
+                    return true;
+                }
+
+                // Caret is always after minus
+                if ((settingsClone.currencySymbolPlacement === 'p' && settingsClone.negativePositiveSignPlacement === 's') || (settingsClone.currencySymbolPlacement === 's' && settingsClone.negativePositiveSignPlacement !== 'p')) {
+                    if (left === '' && contains(right, settingsClone.negativeSignCharacter)) {
+                        left = settingsClone.negativeSignCharacter;
+                        right = right.substring(1, right.length);
+                    }
+
+                    // Change number sign, remove part if should
+                    if (isNegativeStrict(left) || contains(left, settingsClone.negativeSignCharacter)) {
+                        left = left.substring(1, left.length);
+                    } else {
+                        left = (eventCharacter === '-') ? settingsClone.negativeSignCharacter + left : left;
+                    }
+                } else {
+                    if (left === '' && contains(right, settingsClone.negativeSignCharacter)) {
+                        left = settingsClone.negativeSignCharacter;
+                        right = right.substring(1, right.length);
+                    }
+
+                    // Change number sign, remove part if should
+                    if (left.charAt(0) === settingsClone.negativeSignCharacter) {
+                        left = left.substring(1, left.length);
+                    } else {
+                        left = (eventCharacter === '-') ? settingsClone.negativeSignCharacter + left : left;
+                    }
+                }
+
+                this._setValueParts(left, right);
+
+                return true;
+            }
+
+            // If the user tries to insert digit before minus sign
+            const eventNumber = Number(eventCharacter);
+            if (eventNumber >= 0 && eventNumber <= 9) {
+                if (settingsClone.negativeSignCharacter && left === '' && contains(right, settingsClone.negativeSignCharacter)) {
+                    left = settingsClone.negativeSignCharacter;
+                    right = right.substring(1, right.length);
+                }
+
+                if (settingsClone.maximumValue <= 0 && settingsClone.minimumValue < settingsClone.maximumValue && !contains(this.value, settingsClone.negativeSignCharacter) && eventCharacter !== '0') {
+                    left = settingsClone.negativeSignCharacter + left;
+                }
+
+                this._setValueParts(left + eventCharacter, right);
+
+                return true;
+            }
+
+            // Prevent any other character
+            settingsClone.throwInput = false;
+
+            return false;
+        }
+
+
+        /**
          * Formatting of just processed value while keeping the cursor position
          *
          * @param {Event} e
@@ -3052,6 +3161,12 @@ if (typeof define === 'function' && define.amd) {
                 value === this.that.value && (this.eventKeyCode === keyCode.num0 || this.eventKeyCode === keyCode.numpad0)) {
                 this.that.value = value;
                 this._setCaretPosition(position);
+            }
+
+            // fixes the caret position on android "Chrome"
+            // Unfortunatley this does not fix all android browsers - because of varied order of events and keycodes thrown.
+            if (settingsClone.androidFix) {
+                this._setCaretPosition(settingsClone.androidFix);
             }
 
             this.formatted = true; //TODO Rename `this.formatted` to `this._formatExecuted`, since it's possible this function does not need to format anything (in the case where the keycode is dropped for instance)
@@ -3370,6 +3485,86 @@ if (typeof define === 'function' && define.amd) {
         holder.formatted = false;
     }
 
+     /**
+     * Handler for 'input' events.
+     * added to support android devices with mobile chrome browsers and others
+     * Has the potential to replace the keypress event.
+     *
+     * @param {AutoNumericHolder} holder
+     * @param {Event} e
+     */
+
+    function onInput(holder, e) {
+
+        const value = e.target.value;
+
+        // fix caret position on keyup in the formatVa;ue function
+        holder.settings.androidFix = null;
+
+        // android "Chrome" throws keycode #229 for all keys pressed
+        if (holder.eventKeyCode === 229) {
+
+            if (value.length > holder.lastVal.length || value.length >= holder.lastVal.length - holder.selection.length) {
+
+                // determine keycode of the character that was entered and overwrite eventKeyCode
+                holder.eventKeyCode = value.charCodeAt(holder.selection.start);
+
+                // capture actual character entered
+                const androidCharEntered = value.charAt(holder.selection.start);
+
+                // calls the modified _processCharacterInsertionAndroid function
+                const isCharacterInsertionAllowed = holder._processCharacterInsertionAndroid(e, androidCharEntered);
+
+                if (isCharacterInsertionAllowed) {
+
+                    // allowed character entered (number, decimal or plus minus sign)
+                    holder._formatValue(e);
+
+                    // Capture the new caret possition.
+                    // This is require because on keyup "holder._updateAutoNumericHolderEventKeycode(e);" capture the old caret position
+                    // TODO determine if this is a android but or autoNumeric
+                    holder.settings.androidFix = holder.selection.start;
+
+                    const decimalLocation = e.target.value.indexOf(holder.settings.decimalCharacter);
+
+                    // move caret to the right if the androidCharEntered is the decimal charater or the is the left of the caret position
+                    if (androidCharEntered === holder.settings.decimalCharacter || decimalLocation > -1 && decimalLocation < holder.settings.androidFix) {
+                        holder.settings.androidFix = holder.selection.start + 1;
+                    }
+
+                    if (e.target.value.length > value.length) {
+                        // place caret before "keyup" to reduce jumping caret
+                        setElementSelection(e.target, holder.settings.androidFix, holder.settings.androidFix);
+                    }
+
+                    holder.lastVal = e.target.value;
+
+                    return;
+
+                } else {
+
+                    // non allowed character entered over write value before key up and set caret
+                    e.target.value = holder.lastVal;
+                    setElementSelection(e.target, holder.selection.start, holder.selection.end);
+                    holder.settings.androidFix = holder.selection.start;
+
+                }
+
+                e.preventDefault();
+
+                holder.formatted = false;
+
+            } else {
+
+                // characters deleted - assign delete keycode 8 to eventKeyCode
+                holder.eventKeyCode = 8;
+
+            }
+        }
+    }
+
+
+
     /**
      * Handler for 'keyup' events.
      * The user just released any key, hence one event is sent.
@@ -3383,7 +3578,7 @@ if (typeof define === 'function' && define.amd) {
 
         const skip = holder._skipAlways(e);
         delete holder.valuePartsBeforePaste;
-        if (skip || e.target.value === '') {
+        if (skip && holder.settingsClone.androidFix === null || e.target.value === '') {
             return;
         }
 
@@ -3586,6 +3781,9 @@ if (typeof define === 'function' && define.amd) {
         }
 
         let leftPartContainedADot = false;
+        let leftPart = '';
+        let rightPart = '';
+
         switch (holder.settings.onInvalidPaste) {
             /* 4a. Truncate paste behavior:
              * Insert as many numbers as possible on the right hand side of the caret from the pasted text content, until the input reach its range limit.
@@ -3623,8 +3821,9 @@ if (typeof define === 'function' && define.amd) {
                     //TODO Quid if the negative sign is not on the left (negativePositiveSignPlacement and currencySymbolPlacement)?
                 }
 
-                let leftPart = result.slice(0, caretPositionOnInitialTextAfterPasting);
-                let rightPart = result.slice(caretPositionOnInitialTextAfterPasting, result.length);
+                leftPart = result.slice(0, caretPositionOnInitialTextAfterPasting);
+                rightPart = result.slice(caretPositionOnInitialTextAfterPasting, result.length);
+
                 if (pastedText === '.') {
                     if (contains(leftPart, '.')) {
                         // If I remove a dot here, then I need to update the caret position (decrement it by 1) when positioning it
@@ -4354,6 +4553,7 @@ if (typeof define === 'function' && define.amd) {
                     rawValue        : '',
                     trailingNegative: false,
                     caretFix        : false,
+                    androidFix      : null,
                     throwInput      : true, // Throw input event
                     strip           : true,
                     tagList         : allowedTagList,
@@ -4469,6 +4669,7 @@ if (typeof define === 'function' && define.amd) {
                     this.addEventListener('mouseleave', e => { onFocusOutAndMouseLeave($this, holder, e); }, false);
                     this.addEventListener('keydown', e => { onKeydown(holder, e); }, false);
                     this.addEventListener('keypress', e => { onKeypress(holder, e); }, false);
+                    this.addEventListener('input', e => { onInput(holder, e); }, false);
                     this.addEventListener('keyup', e => { onKeyup(holder, settings, e); }, false);
                     this.addEventListener('blur', e => { onBlur(holder, e); }, false);
                     this.addEventListener('paste', e => { onPaste($this, holder, e); }, false);
@@ -4978,7 +5179,7 @@ if (typeof define === 'function' && define.amd) {
         }
 
         // Giving an unformatted value should return the same unformatted value, whatever the options passed as a parameter
-        if (isNumber(value)) {
+        if (isNumber(value) && value.indexOf('.') === -1 && options.leadingZero !== 'keep') {
             return Number(value);
         }
 
@@ -5284,6 +5485,11 @@ if (typeof define === 'function' && define.amd) {
      */
     function arabicToLatinNumbers(arabicNumbers, returnANumber = true, parseDecimalCharacter = false, parseThousandSeparator = false) {
         let result = arabicNumbers.toString();
+
+        if (result.match(/[٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹]/g) === null) {
+            return arabicNumbers;
+        }
+
         if (result === '') {
             return arabicNumbers;
         }
